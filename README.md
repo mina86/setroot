@@ -27,10 +27,7 @@ fn set_background() -> Result<(), Error> {
             load_image_for_dimension(
                 monitor.width, monitor.height)?;
         // Draw the image onto the pixmap.
-        root_pixmap.put_image(
-            monitor.x,
-            monitor.y,
-            setroot::ImageView::from(&image))?;
+        root_pixmap.put_image(monitor.x, monitor.y, image)?;
     }
     // Set the background.
     root_pixmap.set_background()?;
