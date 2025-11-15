@@ -1,0 +1,21 @@
+[package]
+name = "setroot"
+version = "0.1.0"
+authors = ["Michal Nazarewicz <mina86@mina86.com>"]
+description = "A library for setting desktop background image"
+documentation = "https://docs.rs/setroot"
+readme = "README.md"
+repository = "https://codeberg.org/mina86/setroot"
+license = "LGPL-3.0-or-later"
+keywords = ["background", "wallpaper", "xcb", "x11"]
+categories = ["graphics", "gui", "multimedia::images"]
+edition = "2024"
+
+[dependencies]
+bytemuck = { version = "1.24.0", default-features = false }
+image = { version = "0.25.8", default-features = false, optional = true }
+xcb = { version = "1.6.0", features = ["randr"] }
+
+[features]
+default = ["image"]
+image = ["dep:image"]
