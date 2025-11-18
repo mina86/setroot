@@ -18,6 +18,10 @@
 use xcb::x::Atom;
 use xcb::{Xid, XidNew, randr, x};
 
+pub mod err;
+pub mod img;
+
+pub use err::Error;
 pub type Result<T = (), E = Error> = core::result::Result<T, E>;
 
 /// Handler for an X11 connection.
@@ -51,12 +55,12 @@ impl Display {
     /// Returns the default screen number.
     pub fn default_screen_num(&self) -> i32 { self.screen_num }
     /// Returns the default screen.
-    pub fn default_screen(&self) -> Result<&x::Screen> {
+    pub fn default_screen(&self) -> Result<&x::Screen, err::BadScreenNumber> {
         self.conn
             .get_setup()
             .roots()
             .nth(self.screen_num as usize)
-            .ok_or(Error::BadScreenNumber(self.screen_num))
+            .ok_or(err::BadScreenNumber(self.screen_num))
     }
 
     /// Returns list of active monitors.
@@ -75,7 +79,6 @@ impl Display {
             .map(|mon| Monitor {
                 name: self.get_atom_name(mon.name()),
                 primary: mon.primary(),
-                automatic: mon.automatic(),
                 x: mon.x(),
                 y: mon.y(),
                 width: mon.width(),
@@ -104,12 +107,12 @@ impl Display {
     }
 }
 
+
 /// Description of a monitor.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Monitor {
     pub name: Option<String>,
     pub primary: bool,
-    pub automatic: bool,
     pub x: i16,
     pub y: i16,
     pub width: u16,
@@ -117,6 +120,7 @@ pub struct Monitor {
     pub width_in_millimeters: u32,
     pub height_in_millimeters: u32,
 }
+
 
 /// A pixmap on a root window scaled to cover the entire screen.  Used to put
 /// images onto it and eventually set as wallpaper.
@@ -195,7 +199,7 @@ impl<'a> RootPixmap<'a> {
     ///
     /// Returns an error if the dimensions of the image are too large (or on
     /// protocol error).
-    pub fn put_image(&self, x: i16, y: i16, img: impl ImageView) -> Result {
+    pub fn put_image(&self, x: i16, y: i16, img: impl img::View) -> Result {
         let (img_width, img_height) = img.dimensions();
         let dim = img_width.try_into().ok().zip(img_height.try_into().ok());
         let (img_width, img_height): (u16, u16) =
@@ -205,7 +209,7 @@ impl<'a> RootPixmap<'a> {
         if usize::from(img_width) * usize::from(img_height) == img.len() {
             self.put_image_impl(x, y, img_width, img_height, img)
         } else {
-            Err(Error::BadImageBufferSize(img_width, img_height, img.len()))
+            Err(Error::BadBufferSize(img.len(), img_width, img_height))
         }
     }
 
@@ -367,147 +371,3 @@ impl<'a> RootPixmap<'a> {
         }
     }
 }
-
-/// A view of an 24-bit sRGB image backed by a continuous buffer of `[red,
-/// green, blue]` elements.
-pub trait ImageView {
-    /// Returns dimensions of the image.
-    ///
-    /// Note that while the return type is a tuple of 32-bit integers, in
-    /// practice each dimension is limited to the range of 16-bit unsigned
-    /// integers.  This discrepancy is caused by desire for greater
-    /// interoperability with other crates (and `image` crate in particular)
-    /// which support larger images.
-    fn dimensions(&self) -> (u32, u32);
-
-    /// Returns underlying buffer of the image.
-    ///
-    /// The length of the returned slice must match the dimensions.
-    /// Each pixel is represented as `[red, green, blue]` 3-element arrays.
-    ///
-    /// Hint: `&[u8]` slice can be converted into `&[[u8; 3]]` slice using
-    /// [`bytemuck::try_cast_slice`].
-    fn as_rgb(&self) -> &[[u8; 3]];
-}
-
-impl<T: ImageView> ImageView for &T {
-    fn dimensions(&self) -> (u32, u32) { (*self).dimensions() }
-    fn as_rgb(&self) -> &[[u8; 3]] { (*self).as_rgb() }
-}
-
-/// An image in sRGB colour space.
-pub struct ImageRef<'a> {
-    /// Width of the image.
-    ///
-    /// For greater interoperability with other crates (namely `image`), the
-    /// value is a 32-bit unsigned integer.  However, in practice, the width
-    /// must fit a 16-bit unsigned integer or else [`RootPixmap::put_image`]
-    /// will return [`Error::ImageTooLarge`].
-    pub width: u32,
-
-    /// Height of the image.
-    ///
-    /// For greater interoperability with other crates (namely `image`), the
-    /// value is a 32-bit unsigned integer.  However, in practice, the height
-    /// must fit a 16-bit unsigned integer or else [`RootPixmap::put_image`]
-    /// will return [`Error::ImageTooLarge`].
-    pub height: u32,
-
-    /// The underlying image buffer of sRGB values.
-    ///
-    /// If the size doesn’t match dimensions [`RootPixmap::put_image`] will
-    /// fail.
-    pub data: &'a [[u8; 3]],
-}
-
-impl<'a> ImageRef<'a> {
-    /// Constructs new image view for image with given dimensions and underlying
-    /// raw buffer of sRGB values.
-    ///
-    /// Returns `None` if the size of the `data` slice does not match the
-    /// dimensions, i.e. if `width * height * 3 != data.len()`.
-    pub fn new(width: u32, height: u32, data: &'a [u8]) -> Option<Self> {
-        let dim = width.try_into().ok().zip(height.try_into().ok());
-        dim.and_then(|(w, h): (usize, usize)| w.checked_mul(h))
-            .and_then(|area| area.checked_mul(3))
-            .is_some_and(|len| len == data.len())
-            .then(|| Self { width, height, data: bytemuck::cast_slice(data) })
-    }
-}
-
-impl<'a> ImageView for ImageRef<'a> {
-    #[inline]
-    fn dimensions(&self) -> (u32, u32) { (self.width, self.height) }
-    #[inline]
-    fn as_rgb(&self) -> &'a [[u8; 3]] { self.data }
-}
-
-#[cfg(feature = "image")]
-impl ImageView for image::RgbImage {
-    #[inline]
-    fn dimensions(&self) -> (u32, u32) { self.dimensions() }
-    #[inline]
-    fn as_rgb(&self) -> &[[u8; 3]] {
-        bytemuck::cast_slice(self.as_raw().as_slice())
-    }
-}
-
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum Error {
-    /// XCB error as a result of an X request.
-    XcbError(xcb::Error),
-    /// Unrecognised screen number, i.e. negative or does not match any existing
-    /// screen.
-    BadScreenNumber(i32),
-    /// Display server uses unsupported visual.  This library currently supports
-    /// only 24 or 32-bit TrueColour visual.
-    UnsupportedVisual(u8, x::VisualClass),
-    /// Failed to locate visual that matches the root visual.
-    CouldNotFindRootVisual(x::Visualid),
-    /// Image too large.  Image dimensions must fit 16-bit unsigned integer.
-    ImageTooLarge(u32, u32),
-    /// The image buffer size does not match image dimensions.
-    BadImageBufferSize(u16, u16, usize),
-}
-
-impl core::fmt::Display for Error {
-    fn fmt(&self, fmtr: &mut core::fmt::Formatter) -> core::fmt::Result {
-        match self {
-            Self::XcbError(err) => err.fmt(fmtr),
-            Self::BadScreenNumber(num) => {
-                write!(fmtr, "invalid screen number: {num}")
-            }
-            Self::UnsupportedVisual(depth, cls) => {
-                write!(
-                    fmtr,
-                    "unsupported visual class: {depth}-bit {cls:?}; expected \
-                     24/32-bit TrueColor"
-                )
-            }
-            Self::CouldNotFindRootVisual(visual) => {
-                write!(fmtr, "could not find root visual {visual}")
-            }
-            Self::ImageTooLarge(width, height) => {
-                write!(fmtr, "image {width}x{height} too large")
-            }
-            Self::BadImageBufferSize(width, height, size) => {
-                write!(
-                    fmtr,
-                    "bad buffer size {size}*3 for {width}x{height} image"
-                )
-            }
-        }
-    }
-}
-
-macro_rules! err_from_xcb_impl {
-    ($($Err:ty),*) => {
-        $(
-            impl From<$Err> for Error {
-                fn from(err: $Err) -> Self { Self::XcbError(err.into()) }
-            }
-        )*
-    }
-}
-err_from_xcb_impl!(xcb::Error, xcb::ConnError, xcb::ProtocolError);

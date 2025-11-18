@@ -13,6 +13,7 @@ edition = "2024"
 
 [dependencies]
 bytemuck = { version = "1.24.0", default-features = false }
+derive_more = { version = "2.0.1", features = ["display", "from"] }
 image = { version = "0.25.8", default-features = false, optional = true }
 xcb = { version = "1.6.0", features = ["randr"] }
 
