@@ -210,27 +210,19 @@ impl<'a> RootPixmap<'a> {
     ///
     /// Returns an error if the dimensions of the image are too large (or on
     /// protocol error).
-    pub fn put_image(&self, x: i16, y: i16, img: impl img::View) -> Result {
-        let (img_width, img_height) = img.dimensions();
-        let dim = img_width.try_into().ok().zip(img_height.try_into().ok());
-        let (img_width, img_height): (u16, u16) =
-            dim.ok_or(Error::ImageTooLarge(img_width, img_height))?;
-
-        let img = img.as_rgb();
-        if usize::from(img_width) * usize::from(img_height) == img.len() {
-            let data = img
-                .iter()
-                .map(|&[r, g, b]| self.rgb_shifts.from_rgb(r, g, b))
-                .collect::<Vec<u32>>();
-            self.put_raw_impl(
-                x,
-                y,
-                img_width,
-                img_height,
-                bytemuck::must_cast_slice(data.as_slice()),
-            )
+    pub fn put_image<'b>(
+        &self,
+        dst_x: i16,
+        dst_y: i16,
+        img: impl img::IntoXBuffer<'b>,
+    ) -> Result {
+        let (width, height) = img.dimensions()?;
+        let buffer = img.into_x_buffer(self.rgb_shifts)?;
+        let buffer = buffer.as_ref();
+        if usize::from(width) * usize::from(height) * 4 == buffer.len() {
+            self.put_raw_impl(dst_x, dst_y, width, height, buffer)
         } else {
-            Err(Error::BadBufferSize(img.len(), img_width, img_height))
+            Err(Error::BadBufferSize(buffer.len(), width, height))
         }
     }
 

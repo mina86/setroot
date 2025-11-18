@@ -4,7 +4,7 @@ pub enum Error {
     /// XCB error as a result of an X request.
     #[display("{}", _0)]
     #[from(xcb::Error, xcb::ConnError, xcb::ProtocolError)]
-    XcbError(xcb::Error),
+    Xcb(xcb::Error),
     /// Unrecognised screen number, i.e. negative or does not match any existing
     /// screen.
     #[display("invalid screen number: {}", _0)]
@@ -22,6 +22,10 @@ pub enum Error {
     /// The image buffer size does not match image dimensions.
     #[display("buffer {} does not match {}x{} image size", _0, _1, _2)]
     BadBufferSize(usize, u16, u16),
+    #[cfg(feature = "image")]
+    #[display("{}", _0)]
+    #[from]
+    Imgage(image::error::ImageError),
 }
 
 
@@ -34,3 +38,32 @@ pub struct BadScreenNumber(pub i32);
 impl From<BadScreenNumber> for Error {
     fn from(err: BadScreenNumber) -> Error { Error::BadScreenNumber(err.0) }
 }
+
+
+/// The image dimensions are too large to fix `u16`.
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, derive_more::Display,
+)]
+#[display("image too large: {}x{}", _0, _1)]
+pub struct ImageTooLarge(pub u32, pub u32);
+
+impl From<ImageTooLarge> for Error {
+    fn from(err: ImageTooLarge) -> Error { Error::ImageTooLarge(err.0, err.1) }
+}
+
+
+/// The image buffer size does not match image dimensions.
+#[derive(Debug, derive_more::Display)]
+#[display("buffer {} does not match {}x{} image size", _0, _1, _2)]
+pub struct BadBufferSize(pub usize, pub u16, pub u16);
+
+impl From<BadBufferSize> for Error {
+    fn from(err: BadBufferSize) -> Error {
+        Error::BadBufferSize(err.0, err.1, err.2)
+    }
+}
+
+
+impl std::error::Error for Error {}
+impl std::error::Error for BadScreenNumber {}
+impl std::error::Error for BadBufferSize {}

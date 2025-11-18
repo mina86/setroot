@@ -12,8 +12,8 @@ categories = ["graphics", "gui", "multimedia::images"]
 edition = "2024"
 
 [dependencies]
-bytemuck = { version = "1.24.0", default-features = false, features = ["must_cast"] }
-derive_more = { version = "2.0.1", features = ["debug", "display", "from"] }
+bytemuck = { version = "1.24.0", default-features = false, features = ["min_const_generics", "must_cast"] }
+derive_more = { version = "2.0.1", features = ["as_ref", "debug", "deref", "display", "from"] }
 image = { version = "0.25.8", default-features = false, optional = true }
 xcb = { version = "1.6.0", features = ["randr"] }
 

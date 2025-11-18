@@ -47,8 +47,9 @@ fn load_image_for_dimension(
 
 The crate defines the following Cargo feature:
 
-* `image`, enabled by default, includes dependency on `image` crate and allows
-  `image::RgbImage` objects to be passed as arguments to `put_image` function.
+* `image`, enabled by default, adds support for `image` crate and its
+  `DynamicImage` type which can be rendered via `put_image` method and are
+  automatically converted into proper format in sRGB colour space.
 
 
 ## Limitations

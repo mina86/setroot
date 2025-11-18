@@ -1,3 +1,7 @@
+use std::borrow::Cow;
+
+use crate::{Error, err};
+
 /// Definition of a pixel format used by X display server.
 ///
 /// The pixel format is defined as shift values for red, green and blue subpixel
@@ -96,86 +100,198 @@ impl Subpixel for f32 {
 }
 
 
-/// A view of an 24-bit sRGB image backed by a continuous buffer of `[red,
-/// green, blue]` elements.
-pub trait View {
+/// A image which can be converted into an image in format supported by
+/// the X display server format.
+pub trait IntoXBuffer<'a> {
+    /// Container of the image buffer.
+    type Buffer: AsRef<[u8]>;
+
     /// Returns dimensions of the image.
     ///
-    /// Note that while the return type is a tuple of 32-bit integers, in
-    /// practice each dimension is limited to the range of 16-bit unsigned
-    /// integers.  This discrepancy is caused by desire for greater
-    /// interoperability with other crates (and `image` crate in particular)
-    /// which support larger images.
-    fn dimensions(&self) -> (u32, u32);
+    /// Hint: [`new_dimensions`] function can be used to convert dimensions
+    /// expressed as `u32` values into values this method can returns.
+    fn dimensions(&self) -> Result<(u16, u16), err::ImageTooLarge>;
 
-    /// Returns underlying buffer of the image.
+    /// Returns the image buffer in format supported by the X display server.
     ///
-    /// The length of the returned slice must match the dimensions.
-    /// Each pixel is represented as `[red, green, blue]` 3-element arrays.
-    ///
-    /// Hint: `&[u8]` slice can be converted into `&[[u8; 3]]` slice using
-    /// [`bytemuck::try_cast_slice`].
-    fn as_rgb(&self) -> &[[u8; 3]];
+    /// The format is defined by the `rgb_shifts` argument.  Each pixel is
+    /// represented by `u32` with red, green and blue values shifted by number
+    /// of bits specified in the `rgb_shifts` tuple.
+    fn into_x_buffer(
+        self,
+        rgb_shifts: RgbShifts,
+    ) -> crate::Result<Self::Buffer>;
 }
 
-impl<T: View> View for &T {
-    fn dimensions(&self) -> (u32, u32) { (*self).dimensions() }
-    fn as_rgb(&self) -> &[[u8; 3]] { (*self).as_rgb() }
+/// Converts image dimensions into `(u16, u16)` pair.  Returns an error if
+/// either dimension exceeds range of `u16`.
+///
+/// This is a helper function for implementing [`IntoXBuffer::dimensions`]
+/// method.
+pub fn new_dimensions<T: Copy + Into<u32> + TryInto<u16>>(
+    dimensions: (T, T),
+) -> Result<(u16, u16), err::ImageTooLarge> {
+    let (width, height) = dimensions;
+    width
+        .try_into()
+        .ok()
+        .zip(height.try_into().ok())
+        .ok_or_else(|| err::ImageTooLarge(width.into(), height.into()))
 }
 
-/// An image in sRGB colour space.
-pub struct Ref<'a> {
-    /// Width of the image.
-    ///
-    /// For greater interoperability with other crates (namely `image`), the
-    /// value is a 32-bit unsigned integer.  However, in practice, the width
-    /// must fit a 16-bit unsigned integer or else [`RootPixmap::put_image`]
-    /// will return [`Error::ImageTooLarge`].
-    pub width: u32,
 
-    /// Height of the image.
-    ///
-    /// For greater interoperability with other crates (namely `image`), the
-    /// value is a 32-bit unsigned integer.  However, in practice, the height
-    /// must fit a 16-bit unsigned integer or else [`RootPixmap::put_image`]
-    /// will return [`Error::ImageTooLarge`].
-    pub height: u32,
 
-    /// The underlying image buffer of sRGB values.
-    ///
-    /// If the size doesn’t match dimensions [`RootPixmap::put_image`] will
-    /// fail.
-    pub data: &'a [[u8; 3]],
+#[derive(Clone)]
+struct InnerImage<'a, S: Clone> {
+    dimensions: (u16, u16),
+    data: Cow<'a, [S]>,
 }
 
-impl<'a> Ref<'a> {
-    /// Constructs new image view for image with given dimensions and underlying
-    /// raw buffer of sRGB values.
-    ///
-    /// Returns `None` if the size of the `data` slice does not match the
-    /// dimensions, i.e. if `width * height * 3 != data.len()`.
-    pub fn new(width: u32, height: u32, data: &'a [u8]) -> Option<Self> {
-        let dim = width.try_into().ok().zip(height.try_into().ok());
-        dim.and_then(|(w, h): (usize, usize)| w.checked_mul(h))
-            .and_then(|area| area.checked_mul(3))
-            .is_some_and(|len| len == data.len())
-            .then(|| Self { width, height, data: bytemuck::cast_slice(data) })
+impl<'a, S: Clone> InnerImage<'a, S> {
+    pub fn new(
+        width: u32,
+        height: u32,
+        data: Cow<'a, [S]>,
+        channels: usize,
+    ) -> Result<Self, Error> {
+        let (width, height) = new_dimensions((width, height))?;
+        if usize::from(width) * usize::from(height) * channels == data.len() {
+            Ok(Self { dimensions: (width, height), data })
+        } else {
+            let len = data.len() * core::mem::size_of::<S>();
+            Err(Error::BadBufferSize(len, width, height))
+        }
     }
 }
 
-impl<'a> View for Ref<'a> {
-    #[inline]
-    fn dimensions(&self) -> (u32, u32) { (self.width, self.height) }
-    #[inline]
-    fn as_rgb(&self) -> &'a [[u8; 3]] { self.data }
+#[derive(Clone, derive_more::AsRef, derive_more::Deref)]
+#[as_ref(Vec<u32>, [u32])]
+pub struct XBuffer(Vec<u32>);
+
+impl AsRef<[u8]> for XBuffer {
+    fn as_ref(&self) -> &[u8] { bytemuck::must_cast_slice(self.0.as_slice()) }
+}
+
+// https://danielkeep.github.io/tlborm/book/blk-counting.html
+macro_rules! replace_expr {
+    ($_t:tt $sub:expr) => {
+        $sub
+    };
+}
+macro_rules! count_tts {
+    ($($tts:tt)*) => {0usize $(+ replace_expr!($tts 1usize))*};
+}
+
+macro_rules! make_image_type {
+    // TODO(mina86): I would have sworn there was a better way to match
+    // docstring and other annotations.
+    ($(#[doc = $doc:expr])* $Image:ident; |[$($ch:ident),*], $rgb_shifts:ident| $body:expr) => {
+        $(#[doc = $doc])*
+        #[derive(Clone)]
+        pub struct $Image<'a, S: Clone>(InnerImage<'a, S>);
+
+        impl<'a, S: Clone> $Image<'a, S> {
+            /// Constructs a new image with given data.
+            pub fn new(
+                width: u32,
+                height: u32,
+                data: Cow<'a, [S]>,
+            ) -> Result<Self, Error> {
+                let channels = count_tts!($($ch)*);
+                InnerImage::new(width, height, data, channels).map(Self)
+            }
+        }
+
+        impl<'a, S: Subpixel> IntoXBuffer<'a> for $Image<'a, S> {
+            type Buffer = XBuffer;
+            fn dimensions(&self) -> Result<(u16, u16), err::ImageTooLarge> { Ok(self.0.dimensions) }
+            fn into_x_buffer(self, $rgb_shifts: RgbShifts) -> crate::Result<Self::Buffer> {
+                let (chunks, remainder) = self.0.data.as_chunks();
+                assert_eq!(0, remainder.len());
+                Ok(XBuffer(chunks.iter().map(|&[$($ch),*]| $body).collect()))
+            }
+        }
+    }
+}
+
+make_image_type! {
+    /// An image in RGB format and sRGB colour space.
+    RgbImage; |[r, g, b], rgb_shifts| rgb_shifts.from_rgb(r, g, b)
+}
+make_image_type! {
+    /// An image in RGBA format and sRGB colour space.
+    ///
+    /// Alpha channel is ignored when converting to X-compatible image buffer.
+    RgbaImage; |[r, g, b, _alpha], rgb_shifts| rgb_shifts.from_rgb(r, g, b)
+}
+make_image_type! {
+    /// An greyscale image in sRGB colour space.
+    LumaImage; |[y], rgb_shifts| rgb_shifts.from_luma(y)
+}
+make_image_type! {
+    /// An greyscale image with alpha channel in sRGB colour space.
+    ///
+    /// Alpha channel is ignored when converting to X-compatible image buffer.
+    LumaAImage; |[y, _alpha], rgb_shifts| rgb_shifts.from_luma(y)
+}
+
+
+#[cfg(feature = "image")]
+impl IntoXBuffer<'static> for image::DynamicImage {
+    type Buffer = Vec<u8>;
+
+    fn dimensions(&self) -> Result<(u16, u16), err::ImageTooLarge> {
+        new_dimensions(image::GenericImageView::dimensions(self))
+    }
+
+    fn into_x_buffer(
+        mut self,
+        rgb_shifts: RgbShifts,
+    ) -> crate::Result<Self::Buffer> {
+        // https://github.com/image-rs/image/discussions/2650#discussioncomment-15015355
+        if let Some(rgba) = self.as_mut_rgba8() {
+            rgba.apply_color_space(
+                image::metadata::Cicp::SRGB,
+                Default::default(),
+            )?;
+            Ok(fix_channel_order(self.into_rgba8().into_vec(), rgb_shifts))
+        } else {
+            (&self).into_x_buffer(rgb_shifts)
+        }
+    }
 }
 
 #[cfg(feature = "image")]
-impl View for image::RgbImage {
-    #[inline]
-    fn dimensions(&self) -> (u32, u32) { self.dimensions() }
-    #[inline]
-    fn as_rgb(&self) -> &[[u8; 3]] {
-        bytemuck::cast_slice(self.as_raw().as_slice())
+impl IntoXBuffer<'static> for &image::DynamicImage {
+    type Buffer = Vec<u8>;
+
+    fn dimensions(&self) -> Result<(u16, u16), err::ImageTooLarge> {
+        new_dimensions(image::GenericImageView::dimensions(*self))
     }
+
+    fn into_x_buffer(
+        self,
+        rgb_shifts: RgbShifts,
+    ) -> crate::Result<Self::Buffer> {
+        // https://github.com/image-rs/image/discussions/2650#discussioncomment-15015296
+        let (width, height) = image::GenericImageView::dimensions(self);
+        let img = image::RgbaImage::new(width, height);
+        let mut img = image::DynamicImage::ImageRgba8(img);
+        img.copy_from_color_space(self, Default::default())?;
+        // Note: We know img is Rgb8 so this doesn’t allocate.
+        Ok(fix_channel_order(img.into_rgba8().into_vec(), rgb_shifts))
+    }
+}
+
+#[cfg(feature = "image")]
+fn fix_channel_order(mut data: Vec<u8>, rgb_shifts: RgbShifts) -> Vec<u8> {
+    if rgb_shifts.from_rgb(1u8, 2u8, 3u8).to_ne_bytes() != [1u8, 2, 3, 0] {
+        let (chunks, remainder) = data.as_chunks_mut();
+        assert_eq!(0, remainder.len());
+        for chunk in chunks {
+            let [r, g, b, _] = *chunk;
+            *chunk = rgb_shifts.from_rgb(r, g, b).to_ne_bytes();
+        }
+    }
+    data
 }
