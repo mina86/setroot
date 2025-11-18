@@ -244,7 +244,7 @@ impl<'a> RootPixmap<'a> {
                 dst_y: y,
                 left_pad: 0,
                 depth: self.screen.root_depth(),
-                data: bytemuck::cast_slice(data.as_slice()),
+                data: bytemuck::must_cast_slice(data.as_slice()),
             })
             .map_err(Error::from)
     }
