@@ -18,7 +18,7 @@
 use xcb::x::Atom;
 use xcb::{Xid, XidNew, randr, x};
 
-pub type Result<T, E = Error> = core::result::Result<T, E>;
+pub type Result<T = (), E = Error> = core::result::Result<T, E>;
 
 /// Handler for an X11 connection.
 pub struct Display {
@@ -195,7 +195,7 @@ impl<'a> RootPixmap<'a> {
     ///
     /// Returns an error if the dimensions of the image are too large (or on
     /// protocol error).
-    pub fn put_image(&self, x: i16, y: i16, img: impl ImageView) -> Result<()> {
+    pub fn put_image(&self, x: i16, y: i16, img: impl ImageView) -> Result {
         let (img_width, img_height) = img.dimensions();
         let dim = img_width.try_into().ok().zip(img_height.try_into().ok());
         let (img_width, img_height): (u16, u16) =
@@ -216,7 +216,7 @@ impl<'a> RootPixmap<'a> {
         img_width: u16,
         img_height: u16,
         img: &[[u8; 3]],
-    ) -> Result<()> {
+    ) -> Result {
         // Convert 24-bit RGB to 32-bit (X)RGB buffer.
         let (r_shift, g_shift, b_shift) = self.rgb_shifts;
         let data = img
@@ -257,7 +257,7 @@ impl<'a> RootPixmap<'a> {
     ///
     /// Furthermore, the method ignores some errors so long as the back pixmap
     /// of the root window is set.  This may result in redrawing artefacts.
-    pub fn set_background(&self) -> Result<()> {
+    pub fn set_background(&self) -> Result {
         self.set_root_atoms();
 
         self.conn.send_request(&x::KillClient {
