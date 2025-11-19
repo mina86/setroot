@@ -11,8 +11,8 @@ it does not require external applications to accomplish its task.
 
 ## Example usage
 
-```rust,ignore
-fn set_background() -> Result<(), Error> {
+```rust,no_run
+fn set_background() -> Result<(), setroot::Error> {
     // Connect to X display server.
     let display = setroot::Display::open()?;
     // Create a pixmap to use as the background.
@@ -37,11 +37,9 @@ fn set_background() -> Result<(), Error> {
 fn load_image_for_dimension(
     width: u16,
     height: u16,
-) -> Result<image::RgbImage, Error> {
+) -> Result<image::RgbImage, setroot::Error> {
     todo!()
 }
-
-enum Error { /* TODO */ }
 ```
 
 
