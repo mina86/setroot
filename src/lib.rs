@@ -129,7 +129,7 @@ pub struct RootPixmap<'a> {
     screen: &'a x::Screen,
     pixmap: x::Pixmap,
     gc: x::Gcontext,
-    rgb_shifts: (u8, u8, u8),
+    rgb_shifts: img::RgbShifts,
 }
 
 impl core::ops::Drop for RootPixmap<'_> {
@@ -142,7 +142,7 @@ impl core::ops::Drop for RootPixmap<'_> {
 impl<'a> RootPixmap<'a> {
     /// Constructs a new pixmap tied to the screen’s root window and sized to
     /// match screen’s dimensions.
-    fn new(conn: &'a xcb::Connection, scr: &'a x::Screen) -> Result<Self> {
+    pub fn new(conn: &'a xcb::Connection, scr: &'a x::Screen) -> Result<Self> {
         // Verify the visual and get R, G and B shifts for later use.
         let rgb_shifts = Self::get_rgb_shifts(scr)?;
 
@@ -170,28 +170,39 @@ impl<'a> RootPixmap<'a> {
 
     /// Checks that visual is one we support and returns R, G and B channel
     /// sifts.
-    fn get_rgb_shifts(scr: &'a x::Screen) -> Result<(u8, u8, u8)> {
-        let scr_depth = scr.root_depth();
-        let visual = scr
-            .allowed_depths()
-            .filter(|depth| depth.depth() == scr_depth)
-            .flat_map(|depth| depth.visuals())
-            .find(|vis| vis.visual_id() == scr.root_visual())
-            .ok_or(Error::CouldNotFindRootVisual(scr.root_visual()))?;
-
-        // We only support 24 or 32-bit TrueColor
-        if visual.class() != x::VisualClass::TrueColor ||
-            (scr.root_depth() != 24 && scr.root_depth() != 32)
-        {
-            return Err(Error::UnsupportedVisual(scr_depth, visual.class()));
+    fn get_rgb_shifts(scr: &'a x::Screen) -> Result<img::RgbShifts> {
+        fn get_shift(mask: u32) -> Option<u8> {
+            let shift = mask.trailing_zeros();
+            ((mask >> shift) == 0xff).then_some(shift as u8)
         }
 
-        // Get the color channel shifts from the visual's masks
-        let r_shift = visual.red_mask().trailing_zeros() as u8;
-        let g_shift = visual.green_mask().trailing_zeros() as u8;
-        let b_shift = visual.blue_mask().trailing_zeros() as u8;
-        Ok((r_shift, g_shift, b_shift))
+        let root_depth = scr.root_depth();
+        let root_visual = scr.root_visual();
+        scr.allowed_depths()
+            .filter(|depth| depth.depth() == root_depth)
+            .flat_map(|depth| depth.visuals())
+            .find(|vis| vis.visual_id() == root_visual)
+            .ok_or(Error::CouldNotFindRootVisual(root_visual))
+            .and_then(|vis| {
+                if vis.class() == x::VisualClass::TrueColor &&
+                    (root_depth == 24 || root_depth == 32)
+                {
+                    let shifts = get_shift(vis.red_mask())
+                        .zip(get_shift(vis.green_mask()))
+                        .zip(get_shift(vis.blue_mask()));
+                    if let Some(((r, g), b)) = shifts {
+                        return Ok(img::RgbShifts { r, g, b });
+                    }
+                }
+                Err(Error::UnsupportedVisual(root_depth, vis.class()))
+            })
     }
+
+    /// Returns RGB shifts which define pixel format used by the X display.
+    ///
+    /// The shifts allow converting red, green and blue components into `u32`
+    /// value that X server expects.
+    pub fn rgb_shifts(&self) -> img::RgbShifts { self.rgb_shifts }
 
     /// Puts an image at given location on the pixmap.
     ///
@@ -207,44 +218,68 @@ impl<'a> RootPixmap<'a> {
 
         let img = img.as_rgb();
         if usize::from(img_width) * usize::from(img_height) == img.len() {
-            self.put_image_impl(x, y, img_width, img_height, img)
+            let data = img
+                .iter()
+                .map(|&[r, g, b]| self.rgb_shifts.from_rgb(r, g, b))
+                .collect::<Vec<u32>>();
+            self.put_raw_impl(
+                x,
+                y,
+                img_width,
+                img_height,
+                bytemuck::must_cast_slice(data.as_slice()),
+            )
         } else {
             Err(Error::BadBufferSize(img.len(), img_width, img_height))
         }
     }
 
-    fn put_image_impl(
+    /// Puts an image at given location on the pixmap.
+    ///
+    /// The image must be in format accepted by the X display server.  This
+    /// format is described by the [`img::RgbShifts`] object returned by
+    /// [`Self::rgb_shifts`] class.
+    ///
+    /// Usually, [`Self::put_image`] method is more convenient interface since
+    /// it performs all necessary data conversion to generate format acceptable
+    /// by the display server.
+    #[inline]
+    pub fn put_raw(
         &self,
-        x: i16,
-        y: i16,
-        img_width: u16,
-        img_height: u16,
-        img: &[[u8; 3]],
+        dst_x: i16,
+        dst_y: i16,
+        width: u16,
+        height: u16,
+        data: &[u32],
     ) -> Result {
-        // Convert 24-bit RGB to 32-bit (X)RGB buffer.
-        let (r_shift, g_shift, b_shift) = self.rgb_shifts;
-        let data = img
-            .iter()
-            .map(|&[r, g, b]| {
-                (u32::from(r) << r_shift) |
-                    (u32::from(g) << g_shift) |
-                    (u32::from(b) << b_shift)
-            })
-            .collect::<Vec<u32>>();
+        if usize::from(width) * usize::from(height) == data.len() {
+            let data = bytemuck::must_cast_slice(data);
+            self.put_raw_impl(dst_x, dst_y, width, height, data)
+        } else {
+            Err(Error::BadBufferSize(data.len() * 4, width, height))
+        }
+    }
 
-        // Send the PutImage request.
+    fn put_raw_impl(
+        &self,
+        dst_x: i16,
+        dst_y: i16,
+        width: u16,
+        height: u16,
+        data: &[u8],
+    ) -> Result {
         self.conn
             .send_and_check_request(&x::PutImage {
                 format: x::ImageFormat::ZPixmap,
                 drawable: x::Drawable::Pixmap(self.pixmap),
                 gc: self.gc,
-                width: img_width,
-                height: img_height,
-                dst_x: x,
-                dst_y: y,
+                width,
+                height,
+                dst_x,
+                dst_y,
                 left_pad: 0,
                 depth: self.screen.root_depth(),
-                data: bytemuck::must_cast_slice(data.as_slice()),
+                data,
             })
             .map_err(Error::from)
     }
