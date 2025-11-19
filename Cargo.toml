@@ -1,6 +1,6 @@
 [package]
 name = "setroot"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Michal Nazarewicz <mina86@mina86.com>"]
 description = "A library for setting desktop background image"
 documentation = "https://docs.rs/setroot"
