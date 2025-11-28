@@ -40,10 +40,10 @@ impl RgbShifts {
     /// Constructs a colour representation from red, green and blue components.
     ///
     /// ```
-    /// let shifts = setroot::img::RgbShifts { r: 16, g: 8, b: 0 }
-    /// assert_eq!(0x00_FF_F8_E7, shifts.from_rgb(0xFF, 0xF8, 0xE7));
+    /// let shifts = setroot::img::RgbShifts { r: 16, g: 8, b: 0 };
+    /// assert_eq!(0x00_FF_F8_E7, shifts.from_rgb(0xFFFFu16, 0xF8F8, 0xE7E7));
     ///
-    /// let colour = shifts.from_rgb(1, 2, 3);
+    /// let colour = shifts.from_rgb(1u8, 2, 3);
     /// assert_eq!(0x00_01_02_03, colour);
     /// if cfg!(target_endian = "little") {
     ///     assert_eq!([3, 2, 1, 0], colour.to_le_bytes());
@@ -64,8 +64,8 @@ impl RgbShifts {
     /// copied the unused byte of the colour.
     ///
     /// ```
-    /// let shifts = setroot::img::RgbShifts { r: 16, g: 8, b: 0 }
-    /// assert_eq!(0x42_42_42_42, shifts.from_luma(42));
+    /// let shifts = setroot::img::RgbShifts { r: 16, g: 8, b: 0 };
+    /// assert_eq!(0x42_42_42_42, shifts.from_luma(0x42u8));
     /// ```
     pub fn from_luma<S: Subpixel>(&self, luma: S) -> u32 {
         u32::from(luma.to_u8()) * 0x0101_0101
@@ -80,12 +80,48 @@ pub trait Subpixel: bytemuck::Pod {
 }
 
 impl Subpixel for u8 {
+    /// Returns the value unchanged since the component is already in 0–255
+    /// range.
+    ///
+    /// ```
+    /// use setroot::img::Subpixel;
+    ///
+    /// assert_eq!(255, 255u8.to_u8());
+    /// assert_eq!(0, 0u8.to_u8());
+    /// ```
     fn to_u8(self) -> u8 { self }
 }
+
 impl Subpixel for u16 {
+    /// Returns the most significant byte of the value thus reducing it to 0–255
+    /// range.
+    ///
+    /// ```
+    /// use setroot::img::Subpixel;
+    ///
+    /// assert_eq!(0xFF, 0xFFFFu16.to_u8());
+    /// assert_eq!(0x00, 0x00FFu16.to_u8());
+    /// assert_eq!(0x12, 0x1234u16.to_u8());
+    /// ```
     fn to_u8(self) -> u8 { (self >> 8) as u8 }
 }
+
 impl Subpixel for f32 {
+    /// Clamps value to 0.0–1.0 scale and then scales to 0–255 integer value.
+    ///
+    /// Negative values and values greater than one are considered invalid thus
+    /// they are clamped to the valid range boundaries.
+    ///
+    /// ```
+    /// use setroot::img::Subpixel;
+    ///
+    /// assert_eq!(255, 1.0f32.to_u8());
+    /// assert_eq!(0, 0.0f32.to_u8());
+    /// assert_eq!(128, 0.5f32.to_u8());
+    ///
+    /// assert_eq!(255, 1.5f32.to_u8());
+    /// assert_eq!(0, (-1.0f32).to_u8());
+    /// ```
     fn to_u8(self) -> u8 {
         // Handle NaNs.
         #[allow(clippy::neg_cmp_op_on_partial_ord)]
@@ -98,7 +134,6 @@ impl Subpixel for f32 {
         }
     }
 }
-
 
 /// A image which can be converted into an image in format supported by
 /// the X display server format.
@@ -128,6 +163,15 @@ pub trait IntoXBuffer<'a> {
 ///
 /// This is a helper function for implementing [`IntoXBuffer::dimensions`]
 /// method.
+///
+/// ```
+/// # use setroot::img::new_dimensions;
+/// # use setroot::err;
+///
+/// assert_eq!(Ok((100, 200)), new_dimensions((100u32, 200u32)));
+/// assert_eq!(Err(err::ImageTooLarge(70_000, 100)),
+///            new_dimensions((70_000u32, 100u32)));
+/// ```
 pub fn new_dimensions<T: Copy + Into<u32> + TryInto<u16>>(
     dimensions: (T, T),
 ) -> Result<(u16, u16), err::ImageTooLarge> {
@@ -216,25 +260,120 @@ macro_rules! make_image_type {
 
 make_image_type! {
     /// An image in RGB format and sRGB colour space.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use setroot::img::{RgbImage, RgbShifts};
+    /// use setroot::img::IntoXBuffer;
+    ///
+    /// // Construct 2×1 RGB image.
+    /// let data: &[u8] = &[1, 2, 3, 4, 5, 6][..];
+    /// let img = RgbImage::new(2, 1, data.into()).unwrap();
+    ///
+    /// assert_eq!(Ok((2, 1)), img.dimensions());
+    ///
+    /// // Convert to X Buffer.
+    /// let shifts = RgbShifts { r: 16, g: 8, b: 0 };
+    /// let xbuf = img.into_x_buffer(shifts).unwrap();
+    /// let xbuf: &[u8] = xbuf.as_ref();
+    ///
+    /// if cfg!(target_endian = "little") {
+    ///     assert_eq!(&[3, 2, 1, 0, 6, 5, 4, 0], xbuf);
+    /// } else  {
+    ///     assert_eq!(&[0, 1, 2, 3, 0, 4, 5, 6], xbuf);
+    /// }
+    /// ```
     RgbImage; |[r, g, b], rgb_shifts| rgb_shifts.from_rgb(r, g, b)
 }
 make_image_type! {
     /// An image in RGBA format and sRGB colour space.
     ///
     /// Alpha channel is ignored when converting to X-compatible image buffer.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use setroot::img::{RgbaImage, RgbShifts};
+    /// use setroot::img::IntoXBuffer;
+    ///
+    /// // Construct 1×1 RGBA image.
+    /// let data: &[u8] = &[0x10, 0x20, 0x30, 255][..];
+    /// let img = RgbaImage::new(1, 1, data.into()).unwrap();
+    ///
+    /// assert_eq!(Ok((1, 1)), img.dimensions());
+    ///
+    /// // Convert to X Buffer.
+    /// let shifts = RgbShifts { r: 16, g: 8, b: 0 };
+    /// let xbuf = img.into_x_buffer(shifts).unwrap();
+    /// let xbuf: &[u8] = xbuf.as_ref();
+    ///
+    /// let colour = u32::from_ne_bytes(xbuf.try_into().unwrap());
+    /// assert_eq!(0x00102030, colour);
+    /// ```
     RgbaImage; |[r, g, b, _alpha], rgb_shifts| rgb_shifts.from_rgb(r, g, b)
 }
 make_image_type! {
     /// An greyscale image in sRGB colour space.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use setroot::img::{LumaImage, RgbShifts};
+    /// use setroot::img::IntoXBuffer;
+    ///
+    /// // Construct 2×1 greyscale image with f32 subpixels.
+    /// let data: &[f32] = &[0.5, 0.75][..];
+    /// let img = LumaImage::new(2, 1, data.into()).unwrap();
+    ///
+    /// assert_eq!(Ok((2, 1)), img.dimensions());
+    ///
+    /// // Convert to X Buffer.
+    /// let shifts = RgbShifts { r: 16, g: 8, b: 0 };
+    /// let xbuf = img.into_x_buffer(shifts).unwrap();
+    /// let xbuf: &[u8] = xbuf.as_ref();
+    ///
+    /// assert_eq!(&[128, 128, 128, 128, 191, 191, 191, 191], xbuf);
+    /// ```
     LumaImage; |[y], rgb_shifts| rgb_shifts.from_luma(y)
 }
 make_image_type! {
     /// An greyscale image with alpha channel in sRGB colour space.
     ///
     /// Alpha channel is ignored when converting to X-compatible image buffer.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use setroot::img::{LumaAImage, RgbShifts};
+    /// use setroot::img::IntoXBuffer;
+    ///
+    /// // Construct 2×1 greyscale image.
+    /// let data: &[u8] = &[10, 255, 20, 255][..];
+    /// let img = LumaAImage::new(2, 1, data.into()).unwrap();
+    ///
+    /// assert_eq!(Ok((2, 1)), img.dimensions());
+    ///
+    /// // Convert to X Buffer.
+    /// let shifts = RgbShifts { r: 16, g: 8, b: 0 };
+    /// let xbuf = img.into_x_buffer(shifts).unwrap();
+    /// let xbuf: &[u8] = xbuf.as_ref();
+    ///
+    /// assert_eq!(&[10, 10, 10, 10, 20, 20, 20, 20], xbuf);
+    /// ```
     LumaAImage; |[y, _alpha], rgb_shifts| rgb_shifts.from_luma(y)
 }
 
+#[test]
+fn test_buffer_size_mismatch() {
+    // 2×2 image with 4 pixels = 12 bytes
+    let data: [u8; 13] = [0; 13];
+    let res = RgbImage::new(2, 2, (&data[..11]).into());
+    assert!(matches!(res, Err(Error::BadBufferSize(11, 2, 2))));
+    let res = RgbImage::new(2, 2, (&data[..13]).into());
+    assert!(matches!(res, Err(Error::BadBufferSize(13, 2, 2))));
+    RgbImage::new(2, 2, (&data[..12]).into()).unwrap();
+}
 
 #[cfg(feature = "image")]
 impl IntoXBuffer<'static> for image::DynamicImage {
@@ -244,6 +383,31 @@ impl IntoXBuffer<'static> for image::DynamicImage {
         new_dimensions(image::GenericImageView::dimensions(self))
     }
 
+    /// Returns the image buffer in format supported by the X display server.
+    ///
+    /// // Construct a 2×2 DynamicImage.
+    /// let mut buffer = image::RgbImage::new(2, 2);
+    /// buffer.put_pixel(0, 0, image::Rgb([255, 255, 255]));
+    /// buffer.put_pixel(1, 1, image::Rgb([255, 255, 255]));
+    /// buffer.put_pixel(0, 1, image::Rgb([220, 20, 60]));
+    /// buffer.put_pixel(1, 0, image::Rgb([220, 20, 60]));
+    /// let img = image::DynamicImage::from(buffer);
+    ///
+    /// assert_eq!(Ok((2, 2)), img.dimensions());
+    ///
+    /// // Convert to X Buffer.
+    /// let shifts = RgbShifts { r: 16, g: 8, b: 0 };
+    /// let xbuf = img.into_x_buffer(shifts).unwrap();
+    /// let xbuf: &[u8] = xbuf.as_ref();
+    /// let pixels = xbuf.as_chunks::<4>()
+    ///     .0
+    ///     .iter()
+    ///     .map(|px| u32::from_ne_bytes(*px))
+    ///     .collect::<Vec<_>>();
+    ///
+    /// assert_eq!([0xFFFFFF, 0xDC143C, 0xDC143C, 0xFFFFFF],
+    ///            pixels.as_slice());
+    /// ```
     fn into_x_buffer(
         mut self,
         rgb_shifts: RgbShifts,

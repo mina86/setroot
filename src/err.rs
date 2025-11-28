@@ -9,8 +9,8 @@ pub enum Error {
     /// screen.
     #[display("invalid screen number: {}", _0)]
     BadScreenNumber(i32),
-    /// Display server uses unsupported visual.  This library currently supports
-    /// only 24 or 32-bit TrueColour visual.
+    /// Display server uses unsupported visual.  This library supports 24- or
+    /// 32-bit TrueColour visual only.
     #[display("unsupported visual class: {}-bit {:?}", _0, _1)]
     UnsupportedVisual(u8, xcb::x::VisualClass),
     /// Failed to locate visual that matches the root visual.
@@ -31,7 +31,7 @@ pub enum Error {
 
 /// Unrecognised screen number, i.e. negative or does not match any existing
 /// screen.
-#[derive(Debug, derive_more::Display)]
+#[derive(Debug, PartialEq, Eq, derive_more::Display)]
 #[display("invalid screen number: {}", _0)]
 pub struct BadScreenNumber(pub i32);
 
@@ -40,10 +40,8 @@ impl From<BadScreenNumber> for Error {
 }
 
 
-/// The image dimensions are too large to fix `u16`.
-#[derive(
-    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, derive_more::Display,
-)]
+/// The image dimensions are too large to fit `u16`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, derive_more::Display)]
 #[display("image too large: {}x{}", _0, _1)]
 pub struct ImageTooLarge(pub u32, pub u32);
 

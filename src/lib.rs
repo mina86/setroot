@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License along with
 // setroot.  If not, see <http://www.gnu.org/licenses/>.
 
+
 #![doc = include_str!("../README.md")]
 
 use xcb::x::Atom;
@@ -109,7 +110,7 @@ impl Display {
 
 
 /// Description of a monitor.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Monitor {
     pub name: Option<String>,
     pub primary: bool,

@@ -23,7 +23,7 @@ fn set_background() -> Result<(), setroot::Error> {
     // of them.
     for monitor in monitors {
         // Load an image to fit the monitor.
-        let image: image::RgbImage =
+        let image: image::DynamicImage =
             load_image_for_dimension(
                 monitor.width, monitor.height)?;
         // Draw the image onto the pixmap.
@@ -37,7 +37,7 @@ fn set_background() -> Result<(), setroot::Error> {
 fn load_image_for_dimension(
     width: u16,
     height: u16,
-) -> Result<image::RgbImage, setroot::Error> {
+) -> Result<image::DynamicImage, setroot::Error> {
     todo!()
 }
 ```
