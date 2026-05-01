@@ -316,7 +316,7 @@ impl<'a> RootPixmap<'a> {
 
     /// Updates the atoms holding the root pixmap.
     fn set_root_atoms(&self) {
-        let mut killed = None;
+        let mut killed = x::Pixmap::none();
         for name in ["_XROOTPMAP_ID", "ESETROOT_PMAP_ID"] {
             // Intern the atom
             let mut intern_request =
@@ -364,7 +364,7 @@ impl<'a> RootPixmap<'a> {
     }
 
     /// Cleans up old atoms holding the root pixmap.
-    fn clean_root_atom(&self, atom: Atom, prev_killed: &mut Option<u32>) {
+    fn clean_root_atom(&self, atom: Atom, prev_killed: &mut x::Pixmap) {
         let cookie = self.conn.send_request(&x::GetProperty {
             delete: false,
             window: self.screen.root(),
@@ -384,18 +384,12 @@ impl<'a> RootPixmap<'a> {
 
         if reply.r#type() == x::ATOM_PIXMAP &&
             reply.format() == 32 &&
-            reply.length() == 1 &&
-            reply.bytes_after() == 0
+            let &[resource] = reply.value::<u32>() &&
+            resource != 0 &&
+            resource != prev_killed.resource_id()
         {
-            let pixmap_id =
-                reply.value::<u32>().first().copied().unwrap_or_default();
-            if pixmap_id != 0 && Some(pixmap_id) != *prev_killed {
-                let pixmap = unsafe { x::Pixmap::new(pixmap_id) };
-                self.conn.send_request(&x::KillClient {
-                    resource: pixmap.resource_id(),
-                });
-                *prev_killed = Some(pixmap_id);
-            }
+            self.conn.send_request(&x::KillClient { resource });
+            *prev_killed = x::Pixmap::new(resource);
         }
     }
 }
