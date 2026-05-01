@@ -20,12 +20,12 @@ pub enum Error {
     #[display("image {}x{} too large", _0, _1)]
     ImageTooLarge(u32, u32),
     /// The image buffer size does not match image dimensions.
-    #[display("buffer {} does not match {}x{} image size", _0, _1, _2)]
+    #[display("{}-byte buffer does not match {}x{} image", _0, _1, _2)]
     BadBufferSize(usize, u16, u16),
     #[cfg(feature = "image")]
     #[display("{}", _0)]
     #[from]
-    Imgage(image::error::ImageError),
+    Image(image::error::ImageError),
 }
 
 
